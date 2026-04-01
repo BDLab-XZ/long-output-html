@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/scripts/open_long_output_if_fresh.sh\" \"/tmp/claude-last-html-path.txt\" \"/tmp/claude-long-output.stamp\""
+          }
+        ]
+      }
+    ]
+  }
+}
