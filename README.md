@@ -16,6 +16,9 @@
 - 终端只保留一句结论、3–7 条摘要和 HTML 路径
 - HTML 写到本地临时文件
 - 若配置了 `Stop` hook，Claude 回复结束后会自动打开最新 HTML
+- 支持模块化长文排版，而不再只是一种固定正文样式
+- 支持两种正文主版式：`narrative` 与 `sidenotes`
+- 支持按 section 混排：`body` / `summary` / `quote` / `compare`
 
 ## 当前边界
 
@@ -111,6 +114,107 @@ EOF
 - 写入 `/tmp/claude-last-html-path.txt`
 - 写入 `/tmp/claude-long-output.stamp`
 - 在 stdout 输出最终 HTML 路径
+
+## 模块化排版能力
+
+当前渲染脚本在保留旧 JSON 兼容性的前提下，支持更细的 section 级排版控制。
+
+### 顶层可选字段
+
+- `body_variant`: `"narrative" | "sidenotes"`
+  - 控制正文模块的默认主版式
+  - 默认值为 `"narrative"`
+- `tags`: 页面顶部标签列表，可选
+
+### section 可选字段
+
+- `type`: `"body" | "summary" | "quote" | "compare"`
+  - 不传时默认按 `body` 处理
+- `variant`: `"narrative" | "sidenotes"`
+  - 仅对 `type: "body"` 生效
+  - 不传时继承顶层 `body_variant`
+- `lead`: 正文章节导语，可选
+- `notes`: 仅对 `variant: "sidenotes"` 生效
+  - 支持字符串数组：`["注释 1", "注释 2"]`
+  - 也支持对象数组：`[{"label": "术语", "content": "解释"}]`
+
+### 两种正文主版式
+
+#### `narrative`
+
+适合连续解释、系统分析、章节式长文主体，视觉上更接近宽松双栏的编辑排版。
+
+#### `sidenotes`
+
+适合主正文 + 注释栏的长文，右侧显示定义、补充说明、术语解释。
+
+注意：如果 `notes` 为空，脚本会自动退回 `narrative`，避免出现空边栏。
+
+### 模块混排示例
+
+下面这个 JSON 会在同一篇长文里混排不同 section：
+
+```json
+{
+  "title": "模块化长文示例",
+  "subtitle": "不同小节可以使用不同排版形式",
+  "summary": [
+    "第一节用 narrative。",
+    "第二节用 sidenotes。",
+    "后面再插入对比和引用模块。"
+  ],
+  "body_variant": "narrative",
+  "sections": [
+    {
+      "type": "body",
+      "variant": "narrative",
+      "title": "第一节：背景铺垫",
+      "lead": "这节用纯叙述型正文。",
+      "content": "第一段正文。\n\n第二段正文。"
+    },
+    {
+      "type": "body",
+      "variant": "sidenotes",
+      "title": "第二节：概念解释",
+      "lead": "这节用主正文 + 边注栏。",
+      "content": "这里是主叙述。\n\n继续展开解释。",
+      "notes": [
+        {"label": "术语", "content": "这里是边注解释。"},
+        {"label": "提示", "content": "没有足够旁注时应退回 narrative。"}
+      ]
+    },
+    {
+      "type": "compare",
+      "title": "第三节：方案对比",
+      "left": {
+        "title": "方案 A",
+        "items": [
+          {"label": "优点", "text": "实现简单"}
+        ]
+      },
+      "right": {
+        "title": "方案 B",
+        "items": [
+          {"label": "优点", "text": "表达更丰富"}
+        ]
+      },
+      "takeaway": "不同 section 可以按内容角色切换版式。"
+    },
+    {
+      "type": "quote",
+      "content": "先按内容角色分块，再按块选版式。",
+      "note": "这是整个系统的核心设计原则。"
+    }
+  ]
+}
+```
+
+上面这个示例说明的是：
+
+- 一篇长文里可以有多个 section
+- 每个 section 的形式可以不同
+- 混排粒度是 `sections[]`
+- 目前不是“同一个 section 内部再切不同正文版式”，而是“不同 section 之间混排”
 
 ## 验证
 
