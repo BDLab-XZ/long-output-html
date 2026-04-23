@@ -1,70 +1,301 @@
 #!/usr/bin/env python3
-import json
 import html
-import sys
+import json
 import re
+import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
-import uuid
+
+import mistune
 
 DEFAULT_OUTPUT_DIR = "/tmp"
 DEFAULT_OUTPUT_PREFIX = "claude-long-output"
 DEFAULT_STAMP = "/tmp/claude-long-output.stamp"
 DEFAULT_SIDECAR = "/tmp/claude-last-html-path.txt"
+SUPPORTED_SECTION_TYPES = {"body", "summary", "quote", "compare"}
+SUPPORTED_BODY_VARIANTS = {"narrative", "sidenotes"}
 
 
-def esc(s: str) -> str:
-    return html.escape(str(s), quote=True)
+def esc(value) -> str:
+    return html.escape(str(value), quote=True)
 
 
-def block(text: str) -> str:
+def markdown_to_html(text: str) -> str:
     if not text:
         return ""
-    parts = []
-    for para in str(text).split("\n\n"):
-        para = para.strip()
-        if not para:
-            continue
-        if para.startswith("<") and para.endswith(">"):
-            parts.append(para)
-        else:
-            parts.append(f"<p>{para}</p>")
-    return "\n".join(parts)
+    renderer = mistune.create_markdown(
+        escape=False,
+        plugins=["strikethrough", "table", "task_lists", "footnotes"],
+    )
+    return renderer(str(text).strip())
 
 
-def list_items(items):
+def list_items(items, class_name="summary-list"):
     if not items:
         return ""
     lis = "\n".join(f"<li>{esc(x)}</li>" for x in items if str(x).strip())
-    return f'<ul class="summary-list">{lis}</ul>' if lis else ""
+    return f'<ul class="{class_name}">{lis}</ul>' if lis else ""
 
 
-def section_html(section, index):
+def tag_html(tags):
+    if not tags:
+        return ""
+    chips = "".join(
+        f'<span class="tag">{esc(tag)}</span>' for tag in tags if str(tag).strip()
+    )
+    return f'<div class="tag-row">{chips}</div>' if chips else ""
+
+
+def reading_meta(raw_content: str):
+    word_count = len(re.sub(r"\s+", "", raw_content or ""))
+    read_time = max(1, word_count // 300) if word_count else 1
+    return word_count, read_time
+
+
+def normalize_body_variant(value, default="narrative"):
+    variant = str(value or default).strip().lower()
+    if variant not in SUPPORTED_BODY_VARIANTS:
+        return default
+    return variant
+
+
+def normalize_section(section, default_variant):
+    normalized = dict(section or {})
+    section_type = str(normalized.get("type") or "body").strip().lower()
+    if section_type not in SUPPORTED_SECTION_TYPES:
+        section_type = "body"
+    normalized["type"] = section_type
+    if section_type == "body":
+        normalized["variant"] = normalize_body_variant(
+            normalized.get("variant"), default_variant
+        )
+    return normalized
+
+
+def normalize_notes(notes):
+    normalized = []
+    for note in notes or []:
+        if isinstance(note, dict):
+            label = str(note.get("label") or "").strip()
+            content = str(note.get("content") or note.get("text") or "").strip()
+            if label or content:
+                normalized.append({"label": label, "content": content})
+        else:
+            content = str(note).strip()
+            if content:
+                normalized.append({"label": "", "content": content})
+    return normalized
+
+
+def normalize_text_items(section):
+    items = section.get("items") or section.get("points") or []
+    normalized = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                title = str(item.get("title") or "").strip()
+                text = str(item.get("text") or item.get("content") or "").strip()
+                if title or text:
+                    normalized.append({"title": title, "text": text})
+            else:
+                text = str(item).strip()
+                if text:
+                    normalized.append({"title": "", "text": text})
+    if normalized:
+        return normalized
+
+    raw_content = str(section.get("content") or "").strip()
+    if not raw_content:
+        return []
+
+    for line in raw_content.splitlines():
+        cleaned = re.sub(r"^[-*0-9.\s]+", "", line).strip()
+        if cleaned:
+            normalized.append({"title": "", "text": cleaned})
+    return normalized
+
+
+def normalize_compare_side(side, fallback_title):
+    if isinstance(side, dict):
+        title = str(side.get("title") or fallback_title).strip()
+        items = side.get("items") or side.get("points") or []
+    else:
+        title = fallback_title
+        items = side or []
+
+    normalized_items = []
+    for item in items:
+        if isinstance(item, dict):
+            label = str(item.get("label") or item.get("title") or "").strip()
+            text = str(item.get("text") or item.get("content") or "").strip()
+            if label or text:
+                normalized_items.append({"label": label, "text": text})
+        else:
+            text = str(item).strip()
+            if text:
+                normalized_items.append({"label": "", "text": text})
+
+    return {"title": title, "items": normalized_items}
+
+
+def render_section_kicker(index, prefix="SECTION"):
+    return f"{esc(prefix)} {index:02d}"
+
+
+def render_body_section(section, index):
     title = esc(section.get("title", "未命名栏目"))
-    raw_content = section.get("content", "")
-    body = block(raw_content)
+    lead = str(section.get("lead") or "").strip()
+    raw_content = str(section.get("content") or "")
+    body = markdown_to_html(raw_content)
+    word_count, read_time = reading_meta(raw_content)
+    variant = section.get("variant", "narrative")
+    notes = normalize_notes(section.get("notes"))
+    if variant == "sidenotes" and not notes:
+        variant = "narrative"
 
-    eyebrow = f"SECCIÓN {index:02d}"
-    word_count = len(re.sub(r'\s+', '', raw_content))
-    read_time = max(1, word_count // 300)
+    header = f"""
+    <header class=\"section-header\">
+      <div class=\"section-kicker\">{render_section_kicker(index)}</div>
+      <h2 class=\"section-title\">{title}</h2>
+      {f'<p class="section-lead">{esc(lead)}</p>' if lead else ''}
+      <div class=\"section-meta\">
+        <span class=\"meta-item\">{read_time} MIN READ</span>
+        <span class=\"meta-dot\">•</span>
+        <span class=\"meta-item\">{word_count} CHARS</span>
+      </div>
+    </header>
+    """
+
+    if variant == "sidenotes":
+        notes_html = "".join(
+            f"""
+            <article class=\"note-item\">
+              {f'<div class="note-label">{esc(note["label"])}</div>' if note['label'] else ''}
+              <div class=\"note-body\">{markdown_to_html(note['content'])}</div>
+            </article>
+            """
+            for note in notes
+        )
+        layout = f"""
+        <div class=\"body-layout body-layout-sidenotes\">
+          <div class=\"article-body\">{body}</div>
+          <aside class=\"notes-rail\">
+            <div class=\"notes-heading\">Notes</div>
+            <div class=\"notes-list\">{notes_html}</div>
+          </aside>
+        </div>
+        """
+    else:
+        layout = f"""
+        <div class=\"body-layout body-layout-narrative\">
+          <div class=\"article-body narrative-body\">{body}</div>
+        </div>
+        """
 
     return f"""
-    <article class="newspaper-section" id="sec-{index}">
-      <div class="section-left">
-        <div class="eyebrow">{eyebrow}</div>
-        <h2 class="section-title">{title}</h2>
-        <div class="section-meta">
-          <span class="meta-item">Tiempo: {read_time} min</span>
-          <span class="meta-item">Palabras: {word_count}</span>
-        </div>
-      </div>
-      <div class="section-right">
-        <div class="article-body">
-          {body}
-        </div>
-      </div>
+    <article class=\"module module-body module-body-{variant}\" id=\"sec-{index}\">
+      {header}
+      {layout}
     </article>
     """
+
+
+def render_summary_section(section, index):
+    title = esc(section.get("title") or "重点摘要")
+    intro = str(section.get("intro") or section.get("lead") or "").strip()
+    items = normalize_text_items(section)
+    items_html = "".join(
+        f"""
+        <li class=\"summary-card\">
+          <div class=\"summary-index\">{i:02d}</div>
+          <div class=\"summary-copy\">
+            {f'<h3 class="summary-card-title">{esc(item["title"])}</h3>' if item['title'] else ''}
+            <p class=\"summary-card-text\">{esc(item['text'])}</p>
+          </div>
+        </li>
+        """
+        for i, item in enumerate(items, start=1)
+    )
+    return f"""
+    <section class=\"module module-summary\" id=\"sec-{index}\">
+      <header class=\"module-header\">
+        <div class=\"section-kicker\">{render_section_kicker(index, 'DIGEST')}</div>
+        <h2 class=\"module-title\">{title}</h2>
+        {f'<p class="module-intro">{esc(intro)}</p>' if intro else ''}
+      </header>
+      <ol class=\"summary-cards\">{items_html}</ol>
+    </section>
+    """
+
+
+def render_quote_section(section, index):
+    quote = str(section.get("quote") or section.get("content") or "").strip()
+    note = str(section.get("note") or section.get("caption") or "").strip()
+    attribution = str(section.get("attribution") or "").strip()
+    return f"""
+    <aside class=\"module module-quote\" id=\"sec-{index}\">
+      <div class=\"quote-rule\"></div>
+      <blockquote class=\"quote-main\">
+        <p class=\"quote-mark\">“</p>
+        <p class=\"quote-text\">{esc(quote)}</p>
+      </blockquote>
+      {f'<p class="quote-note">{esc(note)}</p>' if note else ''}
+      {f'<p class="quote-attribution">— {esc(attribution)}</p>' if attribution else ''}
+      <div class=\"quote-rule\"></div>
+    </aside>
+    """
+
+
+def render_compare_items(items):
+    return "".join(
+        f"""
+        <li class=\"compare-item\">
+          {f'<span class="compare-label">{esc(item["label"])}</span>' if item['label'] else ''}
+          <span class=\"compare-text\">{esc(item['text'])}</span>
+        </li>
+        """
+        for item in items
+    )
+
+
+def render_compare_section(section, index):
+    title = esc(section.get("title") or "对比")
+    left = normalize_compare_side(section.get("left"), "方案 A")
+    right = normalize_compare_side(section.get("right"), "方案 B")
+    takeaway = str(section.get("takeaway") or "").strip()
+    return f"""
+    <section class=\"module module-compare\" id=\"sec-{index}\">
+      <header class=\"module-header\">
+        <div class=\"section-kicker\">{render_section_kicker(index, 'COMPARE')}</div>
+        <h2 class=\"module-title\">{title}</h2>
+      </header>
+      <div class=\"compare-grid\">
+        <article class=\"compare-card\">
+          <div class=\"compare-card-title\">{esc(left['title'])}</div>
+          <ul class=\"compare-list\">{render_compare_items(left['items'])}</ul>
+        </article>
+        <div class=\"compare-divider\">VS.</div>
+        <article class=\"compare-card\">
+          <div class=\"compare-card-title\">{esc(right['title'])}</div>
+          <ul class=\"compare-list\">{render_compare_items(right['items'])}</ul>
+        </article>
+      </div>
+      {f'<p class="compare-takeaway">{esc(takeaway)}</p>' if takeaway else ''}
+    </section>
+    """
+
+
+def render_module(section, index, default_variant):
+    normalized = normalize_section(section, default_variant)
+    section_type = normalized["type"]
+    if section_type == "summary":
+        return render_summary_section(normalized, index)
+    if section_type == "quote":
+        return render_quote_section(normalized, index)
+    if section_type == "compare":
+        return render_compare_section(normalized, index)
+    return render_body_section(normalized, index)
 
 
 def build_default_output_path() -> str:
@@ -84,6 +315,8 @@ def main():
     summary = data.get("summary", [])
     sections = data.get("sections", [])
     appendix = data.get("appendix", [])
+    tags = data.get("tags", [])
+    body_variant = normalize_body_variant(data.get("body_variant"), "narrative")
     output = data.get("output") or build_default_output_path()
     stamp = data.get("stamp", DEFAULT_STAMP)
     sidecar = data.get("sidecar", DEFAULT_SIDECAR)
@@ -93,245 +326,495 @@ def main():
         dt = datetime.strptime(generated_at, "%Y-%m-%d %H:%M")
         display_date = dt.strftime("%B %d, %Y").upper()
     except Exception:
-        display_date = generated_at.upper()
+        display_date = str(generated_at).upper()
 
     if appendix:
-        sections = list(sections) + [{"title": "附录 / 技术细节", "content": "\n\n".join(appendix)}]
+        sections = list(sections) + [
+            {"title": "附录 / 技术细节", "content": "\n\n".join(appendix), "type": "body"}
+        ]
+
+    subtitle_html = f'<div class="subtitle">{esc(subtitle)}</div>' if subtitle else ""
+    summary_html = (
+        f"""
+    <section class=\"lead-section\">
+      <div class=\"eyebrow\">Summary / 导读摘要</div>
+      <div class=\"lead-columns\">{list_items(summary)}</div>
+    </section>
+    """
+        if summary
+        else ""
+    )
 
     html_doc = f"""<!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang=\"zh-CN\" data-theme=\"light\">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset=\"UTF-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
   <title>{esc(title)}</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Cormorant+Garamond:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Source+Han+Serif+SC:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap');
 
-    :root[data-theme="light"] {{
+    :root[data-theme=\"light\"] {{
       --bg: #f5f1e6;
-      --ink: #2c2c2c;
-      --ink-soft: #666666;
-      --rule-thick: #2c2c2c;
-      --rule-thin: #d6ccb6;
-      --accent: #b83b3b;
-      --code-bg: #e8e2d2;
-      --progress: #b83b3b;
+      --surface: rgba(255, 252, 246, 0.62);
+      --ink: #2d2926;
+      --ink-soft: #6f665f;
+      --rule-strong: #292522;
+      --rule-soft: #d8ccbc;
+      --accent: #b26a3d;
+      --accent-soft: rgba(178, 106, 61, 0.12);
+      --code-bg: #e8e0d3;
+      --progress: #b26a3d;
+      --shadow: 0 20px 50px rgba(61, 48, 36, 0.06);
     }}
 
-    :root[data-theme="dark"] {{
-      --bg: #1c1b19;
-      --ink: #d4d4d4;
-      --ink-soft: #8a8a8a;
-      --rule-thick: #d4d4d4;
-      --rule-thin: #3d3b36;
-      --accent: #d46c6c;
-      --code-bg: #292723;
-      --progress: #d46c6c;
+    :root[data-theme=\"dark\"] {{
+      --bg: #1f1b18;
+      --surface: rgba(35, 31, 28, 0.8);
+      --ink: #ded6cc;
+      --ink-soft: #9f9489;
+      --rule-strong: #d2c7bb;
+      --rule-soft: #4a433c;
+      --accent: #d7a27c;
+      --accent-soft: rgba(215, 162, 124, 0.14);
+      --code-bg: #2c2722;
+      --progress: #d7a27c;
+      --shadow: none;
     }}
 
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; padding: 0; scroll-behavior: smooth; }}
-
     body {{
-      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "DM Sans", sans-serif;
-      background-color: var(--bg);
+      font-family: \"Noto Serif SC\", \"Source Han Serif SC\", \"Songti SC\", \"STSong\", \"Crimson Text\", Georgia, \"Times New Roman\", serif;
+      background: var(--bg);
       color: var(--ink);
       padding: 40px 20px 100px;
       transition: background-color 0.4s ease, color 0.4s ease;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }}
 
     #reading-progress {{
       position: fixed;
-      top: 0; left: 0;
+      top: 0;
+      left: 0;
       height: 3px;
-      background: var(--progress);
       width: 0%;
+      background: var(--progress);
       z-index: 1001;
       transition: width 0.15s ease-out;
     }}
 
     .theme-toggle {{
       position: fixed;
-      bottom: 30px; right: 30px;
-      width: 44px; height: 44px;
-      background: var(--bg);
-      border: 1px solid var(--rule-thin);
+      right: 30px;
+      bottom: 30px;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--rule-soft);
       border-radius: 50%;
+      background: var(--surface);
       color: var(--ink-soft);
-      display: flex; align-items: center; justify-content: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
       z-index: 1000;
-      opacity: 0.4;
-      transition: all 0.3s ease;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      opacity: 0.55;
+      transition: all 0.25s ease;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
     }}
-    .theme-toggle:hover {{ opacity: 1; border-color: var(--ink); color: var(--ink); }}
+    .theme-toggle:hover {{ opacity: 1; color: var(--ink); border-color: var(--ink-soft); }}
     .theme-toggle svg {{ width: 20px; height: 20px; }}
-    :root[data-theme="light"] .icon-sun {{ display: none; }}
-    :root[data-theme="light"] .icon-moon {{ display: block; }}
-    :root[data-theme="dark"] .icon-sun {{ display: block; }}
-    :root[data-theme="dark"] .icon-moon {{ display: none; }}
+    :root[data-theme=\"light\"] .icon-sun {{ display: none; }}
+    :root[data-theme=\"light\"] .icon-moon {{ display: block; }}
+    :root[data-theme=\"dark\"] .icon-sun {{ display: block; }}
+    :root[data-theme=\"dark\"] .icon-moon {{ display: none; }}
 
     .broadsheet {{
-      max-width: 1100px;
+      max-width: 1120px;
       margin: 0 auto;
     }}
 
     .masthead {{
-      border-bottom: 3px solid var(--rule-thick);
-      padding-bottom: 40px;
-      margin-bottom: 40px;
+      border-bottom: 2px solid var(--rule-strong);
+      padding-bottom: 34px;
+      margin-bottom: 34px;
     }}
-    .masthead-top-bar {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--rule-thick); padding-bottom: 16px; margin-bottom: 24px; }}
-    .top-bar-left, .top-bar-right {{ font-family: "DM Sans", sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); max-width: 200px; }}
-    .top-bar-left p {{ margin: 0 0 4px; }}
-    .top-bar-right {{ text-align: right; }}
-    .issue-number {{ font-family: "Cormorant Garamond", serif; font-size: 32px; font-weight: 700; color: var(--accent); line-height: 1; margin-top: 8px; }}
-
-    .masthead h1 {{
-      font-family: "Cormorant Garamond", serif;
-      font-size: clamp(3.5rem, 7vw, 6.5rem);
-      font-weight: 700;
-      text-align: center;
+    .masthead-top-bar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      border-bottom: 1px solid var(--rule-strong);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }}
+    .top-bar-left, .top-bar-right {{
+      font-family: \"DM Sans\", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: -0.02em;
-      line-height: 0.95;
-      margin: 0 0 15px;
-      color: var(--ink);
-    }}
-
-    .subtitle {{
-      text-align: center;
-      font-family: "Cormorant Garamond", serif;
-      font-style: italic;
-      font-size: 1.5rem;
+      letter-spacing: 0.14em;
       color: var(--ink-soft);
-      max-width: 800px;
-      margin: 20px auto 0;
+      max-width: 240px;
     }}
-    .subtitle::before, .subtitle::after {{ content: " · "; }}
-
-    .lead-section {{ padding-bottom: 40px; border-bottom: 1px solid var(--rule-thick); margin-bottom: 50px; }}
-    .eyebrow {{ font-family: "DM Sans", sans-serif; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-soft); margin-bottom: 16px; border-bottom: 1px solid var(--rule-thin); display: inline-block; padding-bottom: 4px; }}
-
-    .lead-columns {{ column-count: 2; column-gap: 50px; column-rule: 1px solid var(--rule-thin); }}
-    .lead-columns ul {{ margin: 0; padding-left: 20px; }}
-    .lead-columns li {{
-      margin-bottom: 16px;
-      font-size: 1.1rem;
-      line-height: 1.7;
+    .top-bar-left p, .top-bar-right p {{ margin: 0 0 4px; }}
+    .top-bar-right {{ text-align: right; }}
+    .issue-number {{
+      font-family: \"Crimson Text\", Georgia, serif;
+      font-size: 32px;
+      line-height: 1;
+      font-weight: 700;
+      color: var(--accent);
+      margin-top: 8px;
+    }}
+    .masthead h1 {{
+      margin: 0;
+      text-align: center;
+      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      font-size: clamp(3.1rem, 7vw, 6.2rem);
+      font-weight: 700;
+      line-height: 0.96;
+      letter-spacing: -0.025em;
       color: var(--ink);
+    }}
+    .subtitle {{
+      margin: 18px auto 0;
+      max-width: 780px;
+      text-align: center;
+      font-size: 1.3rem;
+      line-height: 1.7;
+      color: var(--ink-soft);
+    }}
+    .tag-row {{
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }}
+    .tag {{
+      padding: 6px 10px;
+      border: 1px solid var(--rule-soft);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--ink-soft);
+      font-family: \"DM Sans\", sans-serif;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+
+    .eyebrow, .section-kicker, .notes-heading, .compare-card-title, .note-label, .summary-index {{
+      font-family: \"DM Sans\", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--accent);
+    }}
+
+    .lead-section {{
+      padding-bottom: 36px;
+      margin-bottom: 42px;
+      border-bottom: 1px solid var(--rule-strong);
+    }}
+    .eyebrow {{
+      display: inline-block;
+      margin-bottom: 16px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--rule-soft);
+    }}
+    .lead-columns {{
+      column-count: 2;
+      column-gap: 48px;
+      column-rule: 1px solid var(--rule-soft);
+    }}
+    .summary-list {{ margin: 0; padding-left: 20px; }}
+    .summary-list li {{
+      margin-bottom: 14px;
+      font-size: 1.04rem;
+      line-height: 1.8;
       break-inside: avoid;
     }}
 
-    .newspaper-section {{
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 60px;
-      padding-bottom: 60px;
-      margin-bottom: 60px;
-      border-bottom: 1px solid var(--rule-thin);
+    .articles-container {{ display: grid; gap: 56px; }}
+    .module {{
+      padding-bottom: 56px;
+      border-bottom: 1px solid var(--rule-soft);
     }}
-    .newspaper-section:last-child {{ border-bottom: none; margin-bottom: 0; }}
-
-    .section-left {{ position: sticky; top: 40px; align-self: start; }}
-    .section-title {{
-      font-family: "Cormorant Garamond", serif;
-      font-size: 2.6rem;
-      font-weight: 700;
-      line-height: 1.1;
-      margin: 0 0 20px;
-      color: var(--ink);
+    .module:last-child {{ border-bottom: none; padding-bottom: 0; }}
+    .module-header {{ margin-bottom: 24px; }}
+    .module-title, .section-title {{
+      margin: 10px 0 0;
+      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      font-size: clamp(2.1rem, 4vw, 3.5rem);
+      font-weight: 600;
+      line-height: 1.06;
+      letter-spacing: -0.02em;
     }}
-
-    .section-meta {{ display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--rule-thin); padding-top: 12px; }}
-    .meta-item {{ font-family: "DM Sans", sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }}
-
-    .article-body {{
-      max-width: 660px;
-      font-size: 1.12rem;
+    .module-intro, .section-lead {{
+      max-width: 760px;
+      margin: 16px 0 0;
+      font-size: 1.08rem;
       line-height: 1.9;
-      color: var(--ink);
-      font-weight: 400;
-    }}
-
-    .article-body p {{
-      margin: 0 0 1.8em;
-    }}
-
-    .article-body blockquote {{
-      margin: 40px 0;
-      padding: 0 0 0 24px;
-      border-left: 3px solid var(--accent);
-      font-family: "Cormorant Garamond", serif;
-      font-style: italic;
-      font-size: 1.4rem;
-      line-height: 1.5;
       color: var(--ink-soft);
     }}
+    .section-meta {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      color: var(--ink-soft);
+      font-family: \"DM Sans\", sans-serif;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+    .meta-dot {{ color: var(--rule-soft); }}
 
-    .article-body ul, .article-body ol {{ padding-left: 1.5em; margin-bottom: 1.8em; }}
-    .article-body li {{ margin-bottom: 0.8em; }}
-
-    code, pre {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }}
+    .body-layout {{ display: grid; gap: 32px; }}
+    .body-layout-narrative {{ gap: 24px; }}
+    .body-layout-sidenotes {{
+      grid-template-columns: minmax(0, 2.35fr) minmax(220px, 0.95fr);
+      gap: 36px;
+      align-items: start;
+    }}
+    .article-body {{
+      font-size: 1.06rem;
+      line-height: 2;
+      color: var(--ink);
+      letter-spacing: 0.01em;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }}
+    .article-body.narrative-body {{
+      columns: 2 280px;
+      column-gap: 52px;
+      column-rule: 1px solid var(--rule-soft);
+    }}
+    .article-body.narrative-body > * {{ break-inside: avoid; }}
+    .article-body.narrative-body > h1,
+    .article-body.narrative-body > h2,
+    .article-body.narrative-body > h3,
+    .article-body.narrative-body > h4,
+    .article-body.narrative-body > h5,
+    .article-body.narrative-body > h6,
+    .article-body.narrative-body > hr,
+    .article-body.narrative-body > pre,
+    .article-body.narrative-body > table,
+    .article-body.narrative-body > blockquote,
+    .article-body.narrative-body > img {{
+      column-span: all;
+      -webkit-column-span: all;
+    }}
+    .article-body p {{ margin: 0 0 1.6em; }}
+    .article-body h1, .article-body h2, .article-body h3, .article-body h4, .article-body h5, .article-body h6 {{
+      margin: 1.8em 0 0.8em;
+      font-family: \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      line-height: 1.35;
+      font-weight: 600;
+    }}
+    .article-body h1 {{ font-size: 1.9rem; }}
+    .article-body h2 {{ font-size: 1.55rem; }}
+    .article-body h3 {{ font-size: 1.3rem; }}
+    .article-body h4 {{ font-size: 1.14rem; }}
+    .article-body hr {{ border: none; border-top: 1px solid var(--rule-soft); margin: 2em 0; }}
+    .article-body a {{ color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); }}
+    .article-body a:hover {{ border-bottom-color: var(--accent); }}
+    .article-body strong {{ font-weight: 700; }}
+    .article-body em {{ font-style: italic; }}
+    .article-body blockquote {{
+      margin: 34px 0;
+      padding-left: 22px;
+      border-left: 3px solid var(--accent);
+      font-style: italic;
+      color: var(--ink-soft);
+      font-size: 1.15rem;
+      line-height: 1.85;
+    }}
+    .article-body ul, .article-body ol {{ margin-bottom: 1.8em; padding-left: 1.5em; }}
+    .article-body li {{ margin-bottom: 0.75em; }}
+    .article-body table {{ width: 100%; border-collapse: collapse; margin: 1.8em 0; font-size: 0.97em; }}
+    .article-body th, .article-body td {{ border: 1px solid var(--rule-soft); padding: 10px 12px; vertical-align: top; }}
+    .article-body th {{ background: color-mix(in srgb, var(--code-bg) 74%, transparent); text-align: left; font-weight: 600; }}
+    .article-body img {{ max-width: 100%; height: auto; display: block; margin: 1.5em auto; }}
+    code, pre {{ font-family: \"JetBrainsMono Nerd Font\", \"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }}
     code {{ background: var(--code-bg); padding: 0.2em 0.4em; border-radius: 4px; }}
     pre {{ background: var(--code-bg); padding: 20px; border-radius: 8px; overflow-x: auto; margin-bottom: 1.8em; }}
 
-    @media (max-width: 900px) {{
-      body {{ padding: 20px 15px 80px; }}
-      .masthead-top-bar {{ flex-direction: column; gap: 16px; text-align: left; }}
+    .notes-rail {{
+      border-left: 1px solid var(--rule-soft);
+      padding-left: 24px;
+      position: sticky;
+      top: 28px;
+    }}
+    .notes-heading {{ margin-bottom: 16px; }}
+    .notes-list {{ display: grid; gap: 18px; }}
+    .note-item {{
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--rule-soft);
+    }}
+    .note-item:last-child {{ padding-bottom: 0; border-bottom: none; }}
+    .note-body {{ color: var(--ink-soft); font-size: 0.97rem; line-height: 1.85; }}
+    .note-body p:last-child {{ margin-bottom: 0; }}
+
+    .summary-cards {{
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 18px;
+    }}
+    .summary-card {{
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--rule-soft);
+    }}
+    .summary-card:last-child {{ padding-bottom: 0; border-bottom: none; }}
+    .summary-copy {{ border-left: 1px solid var(--rule-soft); padding-left: 18px; }}
+    .summary-card-title {{
+      margin: 0 0 6px;
+      font-size: 1.08rem;
+      font-family: \"DM Sans\", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }}
+    .summary-card-text {{ margin: 0; line-height: 1.8; color: var(--ink); }}
+
+    .module-quote {{
+      display: grid;
+      gap: 18px;
+      justify-items: center;
+      text-align: center;
+      padding-top: 10px;
+      padding-bottom: 48px;
+    }}
+    .quote-rule {{ width: 100%; border-top: 1px solid var(--rule-soft); }}
+    .quote-main {{ margin: 0; max-width: 760px; }}
+    .quote-mark {{ margin: 0; color: var(--accent); font-size: clamp(3rem, 7vw, 5rem); line-height: 0.9; }}
+    .quote-text {{
+      margin: 0;
+      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", serif;
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 1.18;
+      letter-spacing: -0.015em;
+    }}
+    .quote-note, .quote-attribution {{
+      margin: 0;
+      max-width: 640px;
+      color: var(--ink-soft);
+      line-height: 1.8;
+    }}
+    .quote-attribution {{
+      font-family: \"DM Sans\", sans-serif;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }}
+
+    .compare-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }}
+    .compare-card {{
+      padding: 20px 22px;
+      background: var(--surface);
+      border: 1px solid var(--rule-soft);
+      box-shadow: var(--shadow);
+    }}
+    .compare-card-title {{ margin-bottom: 14px; }}
+    .compare-divider {{
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      color: var(--ink-soft);
+      font-family: \"DM Sans\", sans-serif;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }}
+    .compare-list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }}
+    .compare-item {{ display: grid; gap: 4px; }}
+    .compare-label {{
+      font-family: \"DM Sans\", sans-serif;
+      font-size: 10px;
+      color: var(--accent);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }}
+    .compare-text {{ line-height: 1.75; }}
+    .compare-takeaway {{
+      margin: 18px 0 0;
+      color: var(--ink-soft);
+      line-height: 1.8;
+    }}
+
+    @media (max-width: 980px) {{
+      body {{ padding: 24px 16px 84px; }}
+      .masthead-top-bar {{ flex-direction: column; }}
       .top-bar-right {{ text-align: left; }}
       .lead-columns {{ column-count: 1; }}
-      .newspaper-section {{ grid-template-columns: 1fr; gap: 20px; }}
-      .section-left {{ position: static; }}
-      .article-body {{ max-width: 100%; }}
+      .article-body.narrative-body {{ columns: 1; }}
+      .body-layout-sidenotes {{ grid-template-columns: 1fr; }}
+      .notes-rail {{ position: static; border-left: none; border-top: 1px solid var(--rule-soft); padding-left: 0; padding-top: 20px; }}
+      .compare-grid {{ grid-template-columns: 1fr; }}
+      .compare-divider {{ justify-content: flex-start; padding-left: 2px; }}
+    }}
+
+    @media (max-width: 680px) {{
+      .module-title, .section-title {{ font-size: clamp(1.8rem, 8vw, 2.6rem); }}
+      .summary-card {{ grid-template-columns: 1fr; gap: 10px; }}
+      .summary-copy {{ border-left: none; padding-left: 0; border-top: 1px solid var(--rule-soft); padding-top: 10px; }}
+      .quote-text {{ font-size: clamp(1.6rem, 8vw, 2.2rem); }}
     }}
   </style>
 </head>
 <body>
+  <div id=\"reading-progress\"></div>
 
-  <div id="reading-progress"></div>
-
-  <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle Theme">
-    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+  <button class=\"theme-toggle\" onclick=\"toggleTheme()\" aria-label=\"Toggle Theme\">
+    <svg class=\"icon-sun\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"5\"></circle><line x1=\"12\" y1=\"1\" x2=\"12\" y2=\"3\"></line><line x1=\"12\" y1=\"21\" x2=\"12\" y2=\"23\"></line><line x1=\"4.22\" y1=\"4.22\" x2=\"5.64\" y2=\"5.64\"></line><line x1=\"18.36\" y1=\"18.36\" x2=\"19.78\" y2=\"19.78\"></line><line x1=\"1\" y1=\"12\" x2=\"3\" y2=\"12\"></line><line x1=\"21\" y1=\"12\" x2=\"23\" y2=\"12\"></line><line x1=\"4.22\" y1=\"19.78\" x2=\"5.64\" y2=\"18.36\"></line><line x1=\"18.36\" y1=\"5.64\" x2=\"19.78\" y2=\"4.22\"></line></svg>
+    <svg class=\"icon-moon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"></path></svg>
   </button>
 
-  <main class="broadsheet">
-    <header class="masthead">
-      <div class="masthead-top-bar">
-        <div class="top-bar-left">
+  <main class=\"broadsheet\">
+    <header class=\"masthead\">
+      <div class=\"masthead-top-bar\">
+        <div class=\"top-bar-left\">
           <p>Claude Editorial Engine</p>
-          <p>Anti-fatigue Reading Mode</p>
+          <p>Modular Reading Mode</p>
         </div>
-        <div class="top-bar-right">
+        <div class=\"top-bar-right\">
           <p>{display_date}</p>
-          <div class="issue-number"># 0001</div>
+          <div class=\"issue-number\"># 0001</div>
         </div>
       </div>
       <h1>{esc(title)}</h1>
-      <div class="subtitle">{esc(subtitle)}</div>
+      {subtitle_html}
+      {tag_html(tags)}
     </header>
 
-    <section class="lead-section">
-      <div class="eyebrow">Resumen / 导读摘要</div>
-      <div class="lead-columns">
-        {list_items(summary)}
-      </div>
-    </section>
+    {summary_html}
 
-    <div class="articles-container">
-      {''.join(section_html(s, i + 1) for i, s in enumerate(sections))}
+    <div class=\"articles-container\">
+      {''.join(render_module(section, i + 1, body_variant) for i, section in enumerate(sections))}
     </div>
   </main>
 
   <script>
     function toggleTheme() {{
-      const html = document.documentElement;
-      const currentTheme = html.getAttribute('data-theme');
-      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-      html.setAttribute('data-theme', newTheme);
-      localStorage.setItem('claude_newspaper_theme', newTheme);
+      const root = document.documentElement;
+      const current = root.getAttribute('data-theme');
+      const next = current === 'light' ? 'dark' : 'light';
+      root.setAttribute('data-theme', next);
+      localStorage.setItem('claude_newspaper_theme', next);
     }}
 
     window.addEventListener('DOMContentLoaded', () => {{
@@ -342,13 +825,13 @@ def main():
     window.addEventListener('scroll', () => {{
       const winScroll = document.body.scrollTop || document.documentElement.scrollTop;
       const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
-      const scrolled = (height > 0) ? (winScroll / height) * 100 : 0;
-      document.getElementById("reading-progress").style.width = scrolled + "%";
+      const scrolled = height > 0 ? (winScroll / height) * 100 : 0;
+      document.getElementById('reading-progress').style.width = scrolled + '%';
     }});
 
     window.MathJax = {{ tex: {{ inlineMath: [['$','$'], ['\\(','\\)']], displayMath: [['$$','$$'], ['\\[','\\]']] }}, svg: {{ fontCache: 'global' }} }};
   </script>
-  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+  <script defer src=\"https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js\"></script>
 </body>
 </html>
 """
