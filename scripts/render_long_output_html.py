@@ -352,7 +352,7 @@ def main():
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
   <title>{esc(title)}</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Cormorant+Garamond:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Source+Han+Serif+SC:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Noto+Serif+SC:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap');
 
     :root[data-theme=\"light\"] {{
       --bg: #f5f1e6;
@@ -385,7 +385,7 @@ def main():
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; padding: 0; scroll-behavior: smooth; }}
     body {{
-      font-family: \"Noto Serif SC\", \"Source Han Serif SC\", \"Songti SC\", \"STSong\", \"Crimson Text\", Georgia, \"Times New Roman\", serif;
+      font-family: \"Source Serif 4\", \"Newsreader\", \"Noto Serif SC\", \"Songti SC\", \"STSong\", Georgia, serif;
       background: var(--bg);
       color: var(--ink);
       padding: 40px 20px 100px;
@@ -453,7 +453,7 @@ def main():
       margin-bottom: 24px;
     }}
     .top-bar-left, .top-bar-right {{
-      font-family: \"DM Sans\", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: \"Inter\", -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.14em;
@@ -463,7 +463,7 @@ def main():
     .top-bar-left p, .top-bar-right p {{ margin: 0 0 4px; }}
     .top-bar-right {{ text-align: right; }}
     .issue-number {{
-      font-family: \"Crimson Text\", Georgia, serif;
+      font-family: \"Newsreader\", Georgia, serif;
       font-size: 32px;
       line-height: 1;
       font-weight: 700;
@@ -473,7 +473,7 @@ def main():
     .masthead h1 {{
       margin: 0;
       text-align: center;
-      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      font-family: \"Newsreader\", \"Source Serif 4\", \"Noto Serif SC\", serif;
       font-size: clamp(3.1rem, 7vw, 6.2rem);
       font-weight: 700;
       line-height: 0.96;
@@ -501,14 +501,14 @@ def main():
       border-radius: 999px;
       background: var(--accent-soft);
       color: var(--ink-soft);
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-size: 10px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }}
 
     .eyebrow, .section-kicker, .notes-heading, .compare-card-title, .note-label, .summary-index {{
-      font-family: \"DM Sans\", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: \"Inter\", -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
@@ -549,7 +549,7 @@ def main():
     .module-header {{ margin-bottom: 24px; }}
     .module-title, .section-title {{
       margin: 10px 0 0;
-      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      font-family: \"Newsreader\", \"Source Serif 4\", \"Noto Serif SC\", serif;
       font-size: clamp(2.1rem, 4vw, 3.5rem);
       font-weight: 600;
       line-height: 1.06;
@@ -568,7 +568,7 @@ def main():
       gap: 10px;
       margin-top: 18px;
       color: var(--ink-soft);
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
@@ -613,7 +613,7 @@ def main():
     .article-body p {{ margin: 0 0 1.6em; }}
     .article-body h1, .article-body h2, .article-body h3, .article-body h4, .article-body h5, .article-body h6 {{
       margin: 1.8em 0 0.8em;
-      font-family: \"Noto Serif SC\", \"Source Han Serif SC\", serif;
+      font-family: \"Source Serif 4\", \"Noto Serif SC\", serif;
       line-height: 1.35;
       font-weight: 600;
     }}
@@ -644,6 +644,32 @@ def main():
     code, pre {{ font-family: \"JetBrainsMono Nerd Font\", \"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }}
     code {{ background: var(--code-bg); padding: 0.2em 0.4em; border-radius: 4px; }}
     pre {{ background: var(--code-bg); padding: 20px; border-radius: 8px; overflow-x: auto; margin-bottom: 1.8em; }}
+    mjx-container {{
+      color: var(--ink);
+      font-size: 1.02em;
+      line-height: 1.35;
+    }}
+    mjx-container[jax="SVG"][display="true"] {{
+      display: block;
+      max-width: 100%;
+      margin: 1.35em 0;
+      padding: 0.35em 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+    }}
+    mjx-container[jax="SVG"][display="true"] svg {{
+      display: block;
+      margin: 0 auto;
+      max-width: none;
+    }}
+    mjx-container[jax="SVG"] > svg {{
+      vertical-align: -0.16em;
+    }}
+    .article-body.narrative-body mjx-container[jax="SVG"][display="true"] {{
+      column-span: all;
+      -webkit-column-span: all;
+    }}
 
     .notes-rail {{
       border-left: 1px solid var(--rule-soft);
@@ -680,7 +706,7 @@ def main():
     .summary-card-title {{
       margin: 0 0 6px;
       font-size: 1.08rem;
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-weight: 700;
       letter-spacing: 0.01em;
     }}
@@ -699,7 +725,7 @@ def main():
     .quote-mark {{ margin: 0; color: var(--accent); font-size: clamp(3rem, 7vw, 5rem); line-height: 0.9; }}
     .quote-text {{
       margin: 0;
-      font-family: \"Cormorant Garamond\", \"Noto Serif SC\", serif;
+      font-family: \"Newsreader\", \"Source Serif 4\", \"Noto Serif SC\", serif;
       font-size: clamp(2rem, 4vw, 3.2rem);
       line-height: 1.18;
       letter-spacing: -0.015em;
@@ -711,7 +737,7 @@ def main():
       line-height: 1.8;
     }}
     .quote-attribution {{
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-size: 11px;
       letter-spacing: 0.14em;
       text-transform: uppercase;
@@ -735,7 +761,7 @@ def main():
       display: flex;
       align-items: center;
       color: var(--ink-soft);
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-size: 11px;
       letter-spacing: 0.18em;
       text-transform: uppercase;
@@ -743,7 +769,7 @@ def main():
     .compare-list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }}
     .compare-item {{ display: grid; gap: 4px; }}
     .compare-label {{
-      font-family: \"DM Sans\", sans-serif;
+      font-family: \"Inter\", sans-serif;
       font-size: 10px;
       color: var(--accent);
       letter-spacing: 0.15em;
@@ -829,7 +855,26 @@ def main():
       document.getElementById('reading-progress').style.width = scrolled + '%';
     }});
 
-    window.MathJax = {{ tex: {{ inlineMath: [['$','$'], ['\\(','\\)']], displayMath: [['$$','$$'], ['\\[','\\]']] }}, svg: {{ fontCache: 'global' }} }};
+    window.MathJax = {{
+      tex: {{
+        inlineMath: [['$','$'], ['\\\\(','\\\\)']],
+        displayMath: [['$$','$$'], ['\\\\[','\\\\]']],
+        processEscapes: true,
+        processEnvironments: true,
+        tags: 'ams'
+      }},
+      svg: {{
+        fontCache: 'global',
+        scale: 1,
+        minScale: 0.5,
+        linebreaks: {{ automatic: false }},
+        mtextInheritFont: true,
+        merrorInheritFont: true
+      }},
+      options: {{
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }}
+    }};
   </script>
   <script defer src=\"https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js\"></script>
 </body>
